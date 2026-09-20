@@ -3,16 +3,15 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>WASD Multiplayer</title>
+<title>Snake Multiplayer</title>
 <style>
   :root {
-    --bg: #14171c;
-    --panel: #1b1f27;
-    --line: #2a2f3a;
+    --bg: #0d1117;
+    --panel: #11151c;
+    --line: #1f2530;
     --text: #e7e9ee;
     --muted: #8b93a3;
     --accent: #3ddc97;
-    --accent-dim: #2a7a58;
   }
 
   * { box-sizing: border-box; }
@@ -23,8 +22,8 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 16px;
-    padding: 32px 16px;
+    gap: 14px;
+    padding: 28px 16px;
     background: var(--bg);
     color: var(--text);
     font-family: "SF Mono", "Consolas", "Menlo", monospace;
@@ -35,7 +34,6 @@
     font-size: 18px;
     font-weight: 600;
     letter-spacing: 0.02em;
-    color: var(--text);
   }
 
   #status {
@@ -62,14 +60,12 @@
     background: var(--panel);
     border-radius: 4px;
     overflow: hidden;
+    cursor: crosshair;
   }
 
   canvas {
     display: block;
-    background:
-      linear-gradient(90deg, var(--line) 1px, transparent 1px) 0 0 / 40px 40px,
-      linear-gradient(0deg, var(--line) 1px, transparent 1px) 0 0 / 40px 40px,
-      var(--panel);
+    background: var(--panel);
   }
 
   #hud {
@@ -78,12 +74,51 @@
     left: 12px;
     font-size: 12px;
     color: var(--muted);
-    line-height: 1.6;
+    line-height: 1.7;
+    pointer-events: none;
   }
 
-  #hud span {
-    color: var(--accent);
+  #hud span { color: var(--accent); }
+
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(13, 17, 23, 0.9);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    text-align: center;
   }
+
+  #overlay.show { display: flex; }
+
+  #overlay h2 {
+    margin: 0;
+    font-size: 20px;
+    color: #ff595e;
+  }
+
+  #overlay p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  #overlay button {
+    font-family: inherit;
+    font-size: 14px;
+    padding: 10px 20px;
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  #overlay button:hover { opacity: 0.9; }
 
   #help {
     max-width: 480px;
@@ -92,37 +127,33 @@
     color: var(--muted);
     line-height: 1.6;
   }
-
-  kbd {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-bottom-width: 2px;
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-family: inherit;
-    color: var(--text);
-  }
 </style>
 </head>
 <body>
 
-  <h1>WASD Multiplayer</h1>
+  <h1>Snake Multiplayer</h1>
   <div id="status"><span class="dot"></span><span id="statusText">connecting…</span></div>
 
   <div id="gameWrap">
     <canvas id="game" width="800" height="600"></canvas>
-    <div id="hud">players online: <span id="playerCount">0</span></div>
+    <div id="hud">
+      score: <span id="score">0</span><br />
+      players online: <span id="playerCount">0</span>
+    </div>
+    <div id="overlay">
+      <h2>You died</h2>
+      <p id="finalScore">Score: 0</p>
+      <button id="respawnBtn">Respawn</button>
+    </div>
   </div>
 
-  <p id="help">Move with <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. Open this page in two tabs (or send the link to a friend) to see the other player move in real time.</p>
+  <p id="help">Steer with your mouse — your snake moves forward automatically. Eat the dots to grow. Touching another snake's body kills you and drops your body as food.</p>
 
-  <!-- Socket.IO client, loaded from the official CDN -->
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script>
     // ------------------------------------------------------------------
     // 1. CONNECT TO YOUR RENDER SERVER
-    //    Replace this with your actual Render URL once deployed, e.g.
-    //    "https://wasd-multiplayer-server.onrender.com"
+    //    Replace this with your actual Render URL once deployed.
     // ------------------------------------------------------------------
     const SERVER_URL = "https://wasd-multiplayer-server.onrender.com/";
 
@@ -133,16 +164,17 @@
     const statusEl = document.getElementById("status");
     const statusText = document.getElementById("statusText");
     const playerCountEl = document.getElementById("playerCount");
+    const scoreEl = document.getElementById("score");
+    const overlay = document.getElementById("overlay");
+    const finalScoreEl = document.getElementById("finalScore");
+    const respawnBtn = document.getElementById("respawnBtn");
 
     let myId = null;
-    let players = {};       // authoritative-ish state of everyone, keyed by socket id
-    let world = { width: 800, height: 600, radius: 16 };
-
-    const SPEED = 3.5; // pixels per frame
-    const keys = { w: false, a: false, s: false, d: false };
+    let world = { width: 2400, height: 1800 };
+    let latestState = { players: {}, food: [] };
 
     // ------------------------------------------------------------------
-    // 2. CONNECTION EVENTS
+    // 2. CONNECTION + STATE EVENTS
     // ------------------------------------------------------------------
     socket.on("connect", () => {
       statusEl.classList.add("connected");
@@ -154,109 +186,134 @@
       statusText.textContent = "disconnected — reconnecting…";
     });
 
-    // Server sends the full current state when we first join
     socket.on("init", (data) => {
       myId = data.id;
-      players = data.players;
       world = data.world;
-      updateCount();
     });
 
-    // Someone else joined
-    socket.on("playerJoined", ({ id, player }) => {
-      players[id] = player;
-      updateCount();
-    });
+    socket.on("state", (data) => {
+      latestState = data;
+      playerCountEl.textContent = Object.keys(data.players).length;
 
-    // Someone else moved
-    socket.on("playerMoved", ({ id, x, y }) => {
-      if (players[id]) {
-        players[id].x = x;
-        players[id].y = y;
-      }
-    });
-
-    // Someone left
-    socket.on("playerLeft", (id) => {
-      delete players[id];
-      updateCount();
-    });
-
-    function updateCount() {
-      playerCountEl.textContent = Object.keys(players).length;
-    }
-
-    // ------------------------------------------------------------------
-    // 3. INPUT HANDLING
-    // ------------------------------------------------------------------
-    window.addEventListener("keydown", (e) => {
-      const k = e.key.toLowerCase();
-      if (k in keys) keys[k] = true;
-    });
-
-    window.addEventListener("keyup", (e) => {
-      const k = e.key.toLowerCase();
-      if (k in keys) keys[k] = false;
-    });
-
-    // ------------------------------------------------------------------
-    // 4. GAME LOOP — move locally, broadcast position, draw everyone
-    // ------------------------------------------------------------------
-    let lastSent = { x: null, y: null };
-
-    function update() {
-      const me = players[myId];
+      const me = data.players[myId];
       if (me) {
-        let dx = 0, dy = 0;
-        if (keys.w) dy -= 1;
-        if (keys.s) dy += 1;
-        if (keys.a) dx -= 1;
-        if (keys.d) dx += 1;
-
-        // normalize diagonal movement so it isn't faster than straight movement
-        if (dx !== 0 && dy !== 0) {
-          const len = Math.sqrt(2);
-          dx /= len;
-          dy /= len;
-        }
-
-        me.x = Math.max(world.radius, Math.min(world.width - world.radius, me.x + dx * SPEED));
-        me.y = Math.max(world.radius, Math.min(world.height - world.radius, me.y + dy * SPEED));
-
-        if (me.x !== lastSent.x || me.y !== lastSent.y) {
-          socket.emit("move", { x: me.x, y: me.y });
-          lastSent = { x: me.x, y: me.y };
-        }
+        scoreEl.textContent = me.score;
       }
+    });
+
+    socket.on("youDied", ({ score }) => {
+      finalScoreEl.textContent = `Score: ${score}`;
+      overlay.classList.add("show");
+    });
+
+    respawnBtn.addEventListener("click", () => {
+      socket.emit("respawn");
+      overlay.classList.remove("show");
+    });
+
+    // ------------------------------------------------------------------
+    // 3. MOUSE STEERING
+    //    Angle is measured from the canvas center (where your snake is
+    //    always drawn), toward the mouse cursor.
+    // ------------------------------------------------------------------
+    let mouseX = canvas.width / 2;
+    let mouseY = canvas.height / 2 - 100; // default: aim "up" before first move
+
+    canvas.addEventListener("mousemove", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      mouseX = e.clientX - rect.left;
+      mouseY = e.clientY - rect.top;
+    });
+
+    let lastSteerSent = 0;
+    function sendSteering() {
+      const now = performance.now();
+      if (now - lastSteerSent < 50) return; // throttle to ~20/sec
+      lastSteerSent = now;
+
+      const angle = Math.atan2(mouseY - canvas.height / 2, mouseX - canvas.width / 2);
+      socket.emit("steer", angle);
     }
 
+    // ------------------------------------------------------------------
+    // 4. RENDERING — camera follows the local player
+    // ------------------------------------------------------------------
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      for (const id in players) {
-        const p = players[id];
+      const me = latestState.players[myId];
+      const camX = me ? me.x : world.width / 2;
+      const camY = me ? me.y : world.height / 2;
+
+      ctx.save();
+      ctx.translate(canvas.width / 2 - camX, canvas.height / 2 - camY);
+
+      // Grid background
+      ctx.strokeStyle = "#1f2530";
+      ctx.lineWidth = 1;
+      const gridSize = 40;
+      const startX = Math.floor((camX - canvas.width / 2) / gridSize) * gridSize;
+      const startY = Math.floor((camY - canvas.height / 2) / gridSize) * gridSize;
+      for (let x = startX; x < camX + canvas.width / 2; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, camY - canvas.height / 2);
+        ctx.lineTo(x, camY + canvas.height / 2);
+        ctx.stroke();
+      }
+      for (let y = startY; y < camY + canvas.height / 2; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(camX - canvas.width / 2, y);
+        ctx.lineTo(camX + canvas.width / 2, y);
+        ctx.stroke();
+      }
+
+      // World border
+      ctx.strokeStyle = "#ff595e";
+      ctx.lineWidth = 4;
+      ctx.strokeRect(0, 0, world.width, world.height);
+
+      // Food
+      for (const f of latestState.food) {
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+        ctx.fillStyle = f.color;
+        ctx.fill();
+      }
+
+      // Snakes
+      for (const id in latestState.players) {
+        const p = latestState.players[id];
         const isMe = id === myId;
 
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, world.radius, 0, Math.PI * 2);
-        ctx.fillStyle = p.color || "#3ddc97";
-        ctx.fill();
+        // body, tail to head so the head renders on top
+        for (let i = p.trail.length - 1; i >= 0; i--) {
+          const seg = p.trail[i];
+          ctx.beginPath();
+          ctx.arc(seg.x, seg.y, p.radius, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.fill();
+        }
 
         if (isMe) {
           ctx.lineWidth = 2;
           ctx.strokeStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
           ctx.stroke();
         }
 
+        // label
         ctx.fillStyle = "#e7e9ee";
         ctx.font = "11px monospace";
         ctx.textAlign = "center";
-        ctx.fillText(isMe ? "you" : id.slice(0, 4), p.x, p.y - world.radius - 6);
+        ctx.fillText(isMe ? "you" : id.slice(0, 4), p.x, p.y - p.radius - 8);
       }
+
+      ctx.restore();
     }
 
     function loop() {
-      update();
+      sendSteering();
       draw();
       requestAnimationFrame(loop);
     }
