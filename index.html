@@ -61,11 +61,37 @@
     border-radius: 4px;
     overflow: hidden;
     cursor: crosshair;
+    touch-action: none; /* stop the page from scrolling while steering */
+    max-width: 100%;
   }
 
   canvas {
     display: block;
     background: var(--panel);
+    max-width: 100%;
+    height: auto;
+  }
+
+  #joystickBase, #joystickKnob {
+    display: none;
+    position: absolute;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+
+  #joystickBase {
+    width: 90px;
+    height: 90px;
+    background: rgba(231, 233, 238, 0.08);
+    border: 1px solid rgba(231, 233, 238, 0.25);
+  }
+
+  #joystickKnob {
+    width: 40px;
+    height: 40px;
+    background: rgba(61, 220, 151, 0.35);
+    border: 1px solid var(--accent);
   }
 
   #hud {
@@ -145,9 +171,11 @@
       <p id="finalScore">Score: 0</p>
       <button id="respawnBtn">Respawn</button>
     </div>
+    <div id="joystickBase"></div>
+    <div id="joystickKnob"></div>
   </div>
 
-  <p id="help">Steer with your mouse — your snake moves forward automatically. Eat the dots to grow. Touching another snake's body kills you and drops your body as food.</p>
+  <p id="help">Steer with your mouse — your snake moves forward automatically. On mobile, touch and drag anywhere on the game to steer with a joystick. Eat the dots to grow. Touching another snake's body kills you and drops your body as food.</p>
 
   <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
   <script>
@@ -212,18 +240,72 @@
     });
 
     // ------------------------------------------------------------------
-    // 3. MOUSE STEERING
-    //    Angle is measured from the canvas center (where your snake is
-    //    always drawn), toward the mouse cursor.
+    // 3. STEERING — mouse on desktop, a touch joystick on mobile
     // ------------------------------------------------------------------
+    const gameWrap = document.getElementById("gameWrap");
+    const joystickBase = document.getElementById("joystickBase");
+    const joystickKnob = document.getElementById("joystickKnob");
+    const JOYSTICK_RADIUS = 45; // how far the knob can drag from center, in CSS px
+
+    // Mouse steering: angle measured from the canvas center (where your
+    // snake is always drawn) toward the mouse cursor.
     let mouseX = canvas.width / 2;
     let mouseY = canvas.height / 2 - 100; // default: aim "up" before first move
 
     canvas.addEventListener("mousemove", (e) => {
       const rect = canvas.getBoundingClientRect();
-      mouseX = e.clientX - rect.left;
-      mouseY = e.clientY - rect.top;
+      mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
     });
+
+    // Touch steering: a joystick appears wherever the player puts their
+    // finger down, and the knob's offset from that point sets the angle.
+    let touchAngle = null; // non-null while a finger is actively steering
+
+    function touchPos(e) {
+      const rect = gameWrap.getBoundingClientRect();
+      const t = e.changedTouches[0];
+      return { x: t.clientX - rect.left, y: t.clientY - rect.top };
+    }
+
+    gameWrap.addEventListener("touchstart", (e) => {
+      e.preventDefault();
+      const { x, y } = touchPos(e);
+      joystickBase.dataset.originX = x;
+      joystickBase.dataset.originY = y;
+      joystickBase.style.left = `${x}px`;
+      joystickBase.style.top = `${y}px`;
+      joystickKnob.style.left = `${x}px`;
+      joystickKnob.style.top = `${y}px`;
+      joystickBase.style.display = "block";
+      joystickKnob.style.display = "block";
+    }, { passive: false });
+
+    gameWrap.addEventListener("touchmove", (e) => {
+      if (joystickBase.style.display !== "block") return;
+      e.preventDefault();
+
+      const originX = parseFloat(joystickBase.dataset.originX);
+      const originY = parseFloat(joystickBase.dataset.originY);
+      const { x, y } = touchPos(e);
+
+      const dx = x - originX;
+      const dy = y - originY;
+      const dist = Math.min(JOYSTICK_RADIUS, Math.sqrt(dx * dx + dy * dy));
+      const angle = Math.atan2(dy, dx);
+      touchAngle = angle;
+
+      joystickKnob.style.left = `${originX + Math.cos(angle) * dist}px`;
+      joystickKnob.style.top = `${originY + Math.sin(angle) * dist}px`;
+    }, { passive: false });
+
+    function endTouch() {
+      touchAngle = null;
+      joystickBase.style.display = "none";
+      joystickKnob.style.display = "none";
+    }
+    gameWrap.addEventListener("touchend", endTouch);
+    gameWrap.addEventListener("touchcancel", endTouch);
 
     let lastSteerSent = 0;
     function sendSteering() {
@@ -231,7 +313,10 @@
       if (now - lastSteerSent < 50) return; // throttle to ~20/sec
       lastSteerSent = now;
 
-      const angle = Math.atan2(mouseY - canvas.height / 2, mouseX - canvas.width / 2);
+      const angle =
+        touchAngle !== null
+          ? touchAngle
+          : Math.atan2(mouseY - canvas.height / 2, mouseX - canvas.width / 2);
       socket.emit("steer", angle);
     }
 
