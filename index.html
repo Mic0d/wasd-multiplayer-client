@@ -269,6 +269,7 @@
     }
 
     gameWrap.addEventListener("touchstart", (e) => {
+      if (overlay.classList.contains("show")) return; // let taps reach the Respawn button
       e.preventDefault();
       const { x, y } = touchPos(e);
       joystickBase.dataset.originX = x;
