@@ -395,6 +395,64 @@
       }
 
       ctx.restore();
+
+      drawEdgeIndicators(camX, camY);
+    }
+
+    // Small arrows at the edge of the screen pointing toward players who
+    // are currently off-screen. Once a player's snake comes into view,
+    // their arrow disappears.
+    function drawEdgeIndicators(camX, camY) {
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const margin = 28;
+      const halfW = cx - margin;
+      const halfH = cy - margin;
+
+      for (const id in latestState.players) {
+        if (id === myId) continue;
+        const p = latestState.players[id];
+
+        const dx = p.x - camX;
+        const dy = p.y - camY;
+
+        // Already visible on screen (with a little padding for their size)?
+        const visible = Math.abs(dx) < cx + p.radius && Math.abs(dy) < cy + p.radius;
+        if (visible) continue;
+
+        const angle = Math.atan2(dy, dx);
+
+        // Project onto the edge of an inset rectangle, in the same
+        // direction as the player, so the arrow sits on the screen border.
+        let scale;
+        if (Math.abs(Math.cos(angle)) * halfH > Math.abs(Math.sin(angle)) * halfW) {
+          scale = halfW / Math.abs(Math.cos(angle));
+        } else {
+          scale = halfH / Math.abs(Math.sin(angle));
+        }
+        const ex = cx + Math.cos(angle) * scale;
+        const ey = cy + Math.sin(angle) * scale;
+
+        ctx.save();
+        ctx.translate(ex, ey);
+        ctx.rotate(angle);
+        ctx.beginPath();
+        ctx.moveTo(11, 0);
+        ctx.lineTo(-7, 7);
+        ctx.lineTo(-7, -7);
+        ctx.closePath();
+        ctx.fillStyle = p.color;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0, 0, 0, 0.4)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = "#e7e9ee";
+        ctx.font = "10px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(id.slice(0, 4), ex, ey + (dy < 0 ? 18 : -14));
+      }
     }
 
     function loop() {
